@@ -171,7 +171,7 @@
 
       parent.postMessage({ type: "board-add-result", success: true, item: inserted }, "*");
     }
-
+    
     if (msg.type === "update-board-item") {
       const { id, type: _messageType, ...fields } = msg;
       const { error } = await client.from("board_items").update(fields).eq("id", id);
