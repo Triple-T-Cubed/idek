@@ -173,7 +173,7 @@
     }
 
     if (msg.type === "update-board-item") {
-      const { id, ...fields } = msg;
+      const { id, type: _messageType, ...fields } = msg;
       const { error } = await client.from("board_items").update(fields).eq("id", id);
       parent.postMessage({ type: "board-update-result", success: !error, error: error?.message }, "*");
     }
