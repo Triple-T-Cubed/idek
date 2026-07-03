@@ -18,26 +18,26 @@
   // Safely converts incoming base64 strings back to a binary Blob for Supabase Storage
   function processIncomingFile(fileData, defaultName = "image.png") {
     if (!fileData) return null;
-    
+
     if (typeof fileData === "string" && fileData.startsWith("data:")) {
       const parts = fileData.split(",");
       const mimeMatch = parts[0].match(/:(.*?);/);
       const mime = mimeMatch ? mimeMatch[1] : "image/png";
       const ext = mime.split("/")[1] || "png";
-      
+
       const bstr = atob(parts[1]);
       let n = bstr.length;
       const u8arr = new Uint8Array(n);
       while (n--) {
         u8arr[n] = bstr.charCodeAt(n);
       }
-      
+
       return {
         blob: new Blob([u8arr], { type: mime }),
         ext: ext
       };
     }
-    
+
     // Fallback if a standard File object manages to pass through cleanly
     return {
       blob: fileData,
@@ -46,113 +46,6 @@
   }
 
   window.addEventListener("message", async (event) => {
-    if (msg.type === "send-friend-request") {
-  const { targetUserId } = msg;
-  const { data: userData } = await client.auth.getUser();
-  if (!userData.user) {
-    parent.postMessage({ type: "friend-request-result", success: false, error: "Not logged in." }, "*");
-    return;
-  }
-  const me = userData.user.id;
-
-  const { data: existing } = await client
-    .from("friendships")
-    .select("*")
-    .or(`and(requester_id.eq.${me},addressee_id.eq.${targetUserId}),and(requester_id.eq.${targetUserId},addressee_id.eq.${me})`)
-    .maybeSingle();
-
-  if (existing) {
-    parent.postMessage({ type: "friend-request-result", success: false, error: "Already friends or request pending." }, "*");
-    return;
-  }
-
-  const { error } = await client.from("friendships").insert({
-    requester_id: me,
-    addressee_id: targetUserId,
-    status: "pending",
-  });
-
-  parent.postMessage({ type: "friend-request-result", success: !error, error: error?.message }, "*");
-}
-
-if (msg.type === "respond-friend-request") {
-  const { requestId, accept } = msg;
-  if (accept) {
-    const { error } = await client.from("friendships").update({ status: "accepted" }).eq("id", requestId);
-    parent.postMessage({ type: "friend-response-result", success: !error, error: error?.message }, "*");
-  } else {
-    const { error } = await client.from("friendships").delete().eq("id", requestId);
-    parent.postMessage({ type: "friend-response-result", success: !error, error: error?.message }, "*");
-  }
-}
-
-if (msg.type === "get-my-friendships") {
-  const { data: userData } = await client.auth.getUser();
-  if (!userData.user) {
-    parent.postMessage({ type: "my-friendships", friendships: [] }, "*");
-    return;
-  }
-  const me = userData.user.id;
-  const { data, error } = await client
-    .from("friendships")
-    .select("*")
-    .or(`requester_id.eq.${me},addressee_id.eq.${me}`);
-  parent.postMessage({ type: "my-friendships", friendships: data || [], error: error?.message }, "*");
-}
-
-if (msg.type === "get-friends-of-user") {
-  const { userId } = msg;
-  const { data, error } = await client
-    .from("friendships")
-    .select("*")
-    .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
-    .eq("status", "accepted");
-
-  if (error || !data || data.length === 0) {
-    parent.postMessage({ type: "user-friends", userId, friends: [], error: error?.message }, "*");
-    return;
-  }
-
-  const friendIds = data.map((f) => (f.requester_id === userId ? f.addressee_id : f.requester_id));
-  const { data: profiles } = await client
-    .from("profiles")
-    .select("id, username, avatar_url")
-    .in("id", friendIds);
-
-  parent.postMessage({ type: "user-friends", userId, friends: profiles || [] }, "*");
-}
-
-if (msg.type === "get-incoming-requests") {
-  const { data: userData } = await client.auth.getUser();
-  if (!userData.user) {
-    parent.postMessage({ type: "incoming-requests", requests: [] }, "*");
-    return;
-  }
-  const me = userData.user.id;
-  const { data, error } = await client
-    .from("friendships")
-    .select("*")
-    .eq("addressee_id", me)
-    .eq("status", "pending");
-
-  if (error || !data || data.length === 0) {
-    parent.postMessage({ type: "incoming-requests", requests: [], error: error?.message }, "*");
-    return;
-  }
-
-  const requesterIds = data.map((r) => r.requester_id);
-  const { data: profiles } = await client
-    .from("profiles")
-    .select("id, username, avatar_url")
-    .in("id", requesterIds);
-
-  const requests = data.map((r) => {
-    const p = (profiles || []).find((pr) => pr.id === r.requester_id);
-    return { id: r.id, username: p?.username || "unknown", avatarUrl: p?.avatar_url || "" };
-  });
-
-  parent.postMessage({ type: "incoming-requests", requests }, "*");
-}
     const msg = event.data;
     if (!msg || !msg.type) return;
 
@@ -230,7 +123,7 @@ if (msg.type === "get-incoming-requests") {
       });
 
       if (updateError) {
-        parent.pushMessage({ type: "profile-result", success: false, error: updateError.message }, "*");
+        parent.postMessage({ type: "profile-result", success: false, error: updateError.message }, "*");
         return;
       }
 
@@ -382,13 +275,128 @@ if (msg.type === "get-incoming-requests") {
           about_me: data.user.user_metadata.about_me || null,
           avatar_url: data.user.user_metadata.avatar_url || null,
         });
-parent.postMessage(
-  { type: "session-result", loggedIn: true, username: data.user.user_metadata.username, userId: data.user.id },
-  "*"
-);
+        parent.postMessage(
+          {
+            type: "session-result",
+            loggedIn: true,
+            username: data.user.user_metadata.username,
+            userId: data.user.id,
+          },
+          "*"
+        );
       } else {
         parent.postMessage({ type: "session-result", loggedIn: false }, "*");
       }
+    }
+
+    // ---------- Friends ----------
+
+    if (msg.type === "send-friend-request") {
+      const { targetUserId } = msg;
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "friend-request-result", success: false, error: "Not logged in." }, "*");
+        return;
+      }
+      const me = userData.user.id;
+
+      const { data: existing } = await client
+        .from("friendships")
+        .select("*")
+        .or(`and(requester_id.eq.${me},addressee_id.eq.${targetUserId}),and(requester_id.eq.${targetUserId},addressee_id.eq.${me})`)
+        .maybeSingle();
+
+      if (existing) {
+        parent.postMessage({ type: "friend-request-result", success: false, error: "Already friends or request pending." }, "*");
+        return;
+      }
+
+      const { error } = await client.from("friendships").insert({
+        requester_id: me,
+        addressee_id: targetUserId,
+        status: "pending",
+      });
+
+      parent.postMessage({ type: "friend-request-result", success: !error, error: error?.message }, "*");
+    }
+
+    if (msg.type === "respond-friend-request") {
+      const { requestId, accept } = msg;
+      if (accept) {
+        const { error } = await client.from("friendships").update({ status: "accepted" }).eq("id", requestId);
+        parent.postMessage({ type: "friend-response-result", success: !error, error: error?.message }, "*");
+      } else {
+        const { error } = await client.from("friendships").delete().eq("id", requestId);
+        parent.postMessage({ type: "friend-response-result", success: !error, error: error?.message }, "*");
+      }
+    }
+
+    if (msg.type === "get-my-friendships") {
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "my-friendships", friendships: [] }, "*");
+        return;
+      }
+      const me = userData.user.id;
+      const { data, error } = await client
+        .from("friendships")
+        .select("*")
+        .or(`requester_id.eq.${me},addressee_id.eq.${me}`);
+      parent.postMessage({ type: "my-friendships", friendships: data || [], error: error?.message }, "*");
+    }
+
+    if (msg.type === "get-friends-of-user") {
+      const { userId } = msg;
+      const { data, error } = await client
+        .from("friendships")
+        .select("*")
+        .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+        .eq("status", "accepted");
+
+      if (error || !data || data.length === 0) {
+        parent.postMessage({ type: "user-friends", userId, friends: [], error: error?.message }, "*");
+        return;
+      }
+
+      const friendIds = data.map((f) => (f.requester_id === userId ? f.addressee_id : f.requester_id));
+      const { data: profiles } = await client
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .in("id", friendIds);
+
+      parent.postMessage({ type: "user-friends", userId, friends: profiles || [] }, "*");
+    }
+
+    if (msg.type === "get-incoming-requests") {
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "incoming-requests", requests: [] }, "*");
+        return;
+      }
+      const me = userData.user.id;
+      const { data, error } = await client
+        .from("friendships")
+        .select("*")
+        .eq("addressee_id", me)
+        .eq("status", "pending");
+
+      if (error || !data || data.length === 0) {
+        parent.postMessage({ type: "incoming-requests", requests: [], error: error?.message }, "*");
+        return;
+      }
+
+      const requesterIds = data.map((r) => r.requester_id);
+      const { data: profiles } = await client
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .in("id", requesterIds);
+
+      const requests = data.map((r) => {
+        const p = (profiles || []).find((pr) => pr.id === r.requester_id);
+        return { id: r.id, username: p?.username || "unknown", avatarUrl: p?.avatar_url || "" };
+      });
+
+      parent.postMessage({ type: "incoming-requests", requests }, "*");
     }
   });
 
