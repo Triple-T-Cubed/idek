@@ -275,10 +275,10 @@
           about_me: data.user.user_metadata.about_me || null,
           avatar_url: data.user.user_metadata.avatar_url || null,
         });
-        parent.postMessage(
-          { type: "session-result", loggedIn: true, username: data.user.user_metadata.username },
-          "*"
-        );
+parent.postMessage(
+  { type: "session-result", loggedIn: true, username: data.user.user_metadata.username, userId: data.user.id },
+  "*"
+);
       } else {
         parent.postMessage({ type: "session-result", loggedIn: false }, "*");
       }
