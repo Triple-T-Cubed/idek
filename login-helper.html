@@ -15,9 +15,36 @@
     return username.toLowerCase() + "@users.mysite.local";
   }
 
-  // This page does nothing visible. It just listens for messages
-  // from the Neocities page sitting in an invisible iframe, does the
-  // actual Supabase work, and messages the result back.
+  // Safely converts incoming base64 strings back to a binary Blob for Supabase Storage
+  function processIncomingFile(fileData, defaultName = "image.png") {
+    if (!fileData) return null;
+    
+    if (typeof fileData === "string" && fileData.startsWith("data:")) {
+      const parts = fileData.split(",");
+      const mimeMatch = parts[0].match(/:(.*?);/);
+      const mime = mimeMatch ? mimeMatch[1] : "image/png";
+      const ext = mime.split("/")[1] || "png";
+      
+      const bstr = atob(parts[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      
+      return {
+        blob: new Blob([u8arr], { type: mime }),
+        ext: ext
+      };
+    }
+    
+    // Fallback if a standard File object manages to pass through cleanly
+    return {
+      blob: fileData,
+      ext: fileData.name ? fileData.name.split(".").pop() : "png"
+    };
+  }
+
   window.addEventListener("message", async (event) => {
     const msg = event.data;
     if (!msg || !msg.type) return;
@@ -74,13 +101,13 @@
 
       let avatarUrl = userData.user.user_metadata.avatar_url || null;
 
-      if (photoFile) {
-        const fileExt = photoFile.name.split(".").pop();
-        const filePath = `${userData.user.id}/avatar.${fileExt}`;
+      const fileObj = processIncomingFile(photoFile, "avatar.png");
+      if (fileObj) {
+        const filePath = `${userData.user.id}/avatar.${fileObj.ext}`;
 
         const { error: uploadError } = await client.storage
           .from("avatars")
-          .upload(filePath, photoFile, { upsert: true });
+          .upload(filePath, fileObj.blob, { upsert: true, contentType: fileObj.blob.type });
 
         if (uploadError) {
           parent.postMessage({ type: "profile-result", success: false, error: uploadError.message }, "*");
@@ -88,7 +115,6 @@
         }
 
         const { data: publicUrlData } = client.storage.from("avatars").getPublicUrl(filePath);
-        // cache-bust so the new photo shows immediately instead of a cached old one
         avatarUrl = publicUrlData.publicUrl + "?t=" + Date.now();
       }
 
@@ -97,7 +123,7 @@
       });
 
       if (updateError) {
-        parent.postMessage({ type: "profile-result", success: false, error: updateError.message }, "*");
+        parent.pushMessage({ type: "profile-result", success: false, error: updateError.message }, "*");
         return;
       }
 
@@ -194,12 +220,12 @@
       }
 
       let imageUrl = null;
-      if (itemType === "photo" && photoFile) {
-        const fileExt = photoFile.name.split(".").pop();
-        const filePath = `${userData.user.id}/${Date.now()}.${fileExt}`;
+      const fileObj = processIncomingFile(photoFile, "board.png");
+      if (itemType === "photo" && fileObj) {
+        const filePath = `${userData.user.id}/${Date.now()}.${fileObj.ext}`;
         const { error: uploadError } = await client.storage
           .from("board-images")
-          .upload(filePath, photoFile);
+          .upload(filePath, fileObj.blob, { contentType: fileObj.blob.type });
         if (uploadError) {
           parent.postMessage({ type: "board-add-result", success: false, error: uploadError.message }, "*");
           return;
@@ -243,8 +269,6 @@
     if (msg.type === "check-session") {
       const { data } = await client.auth.getUser();
       if (data.user) {
-        // self-heal: make sure this user has a row in `profiles` even if
-        // their session predates the table or they haven't logged in since
         await client.from("profiles").upsert({
           id: data.user.id,
           username: data.user.user_metadata.username,
@@ -261,7 +285,6 @@
     }
   });
 
-  // Tell the parent page this helper has finished loading and is ready.
   parent.postMessage({ type: "helper-ready" }, "*");
 </script>
 </body>
