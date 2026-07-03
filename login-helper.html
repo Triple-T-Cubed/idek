@@ -466,6 +466,25 @@
         "*"
       );
     }
+
+    if (msg.type === "mark-conversation-read") {
+      const { otherUserId } = msg;
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "mark-read-result", success: false }, "*");
+        return;
+      }
+      const me = userData.user.id;
+
+      const { error } = await client
+        .from("messages")
+        .update({ read: true })
+        .eq("sender_id", otherUserId)
+        .eq("recipient_id", me)
+        .eq("read", false);
+
+      parent.postMessage({ type: "mark-read-result", success: !error, otherUserId, error: error?.message }, "*");
+    }
   });
 
   parent.postMessage({ type: "helper-ready" }, "*");
