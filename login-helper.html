@@ -26,13 +26,17 @@
       const { username, password } = msg;
       const email = toFakeEmail(username);
 
-      const { error: signUpError } = await client.auth.signUp({
+      const { data: signUpData, error: signUpError } = await client.auth.signUp({
         email,
         password,
         options: { data: { username } },
       });
 
       if (!signUpError) {
+        const uid = signUpData.user?.id;
+        if (uid) {
+          await client.from("profiles").upsert({ id: uid, username });
+        }
         parent.postMessage({ type: "auth-result", success: true, username }, "*");
         return;
       }
@@ -44,10 +48,14 @@
         errMsg.includes("already been registered");
 
       if (accountExists) {
-        const { error: signInError } = await client.auth.signInWithPassword({ email, password });
+        const { data: signInData, error: signInError } = await client.auth.signInWithPassword({ email, password });
         if (signInError) {
           parent.postMessage({ type: "auth-result", success: false, error: "Incorrect password." }, "*");
           return;
+        }
+        const uid = signInData.user?.id;
+        if (uid) {
+          await client.from("profiles").upsert({ id: uid, username });
         }
         parent.postMessage({ type: "auth-result", success: true, username }, "*");
         return;
@@ -93,6 +101,13 @@
         return;
       }
 
+      await client.from("profiles").upsert({
+        id: userData.user.id,
+        username: userData.user.user_metadata.username,
+        about_me: aboutMe,
+        avatar_url: avatarUrl,
+      });
+
       parent.postMessage({ type: "profile-result", success: true, aboutMe, avatarUrl }, "*");
     }
 
@@ -114,16 +129,57 @@
       );
     }
 
-    if (msg.type === "get-board-items") {
-      const { data: userData } = await client.auth.getUser();
-      if (!userData.user) {
-        parent.postMessage({ type: "board-items", items: [] }, "*");
+    if (msg.type === "list-profiles") {
+      const { data: profiles, error } = await client
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .order("username", { ascending: true });
+
+      parent.postMessage({ type: "profiles-list", profiles: profiles || [], error: error?.message }, "*");
+    }
+
+    if (msg.type === "get-profile-by-username") {
+      const { username } = msg;
+      const { data: profile, error } = await client
+        .from("profiles")
+        .select("id, username, about_me, avatar_url")
+        .eq("username", username)
+        .maybeSingle();
+
+      if (error || !profile) {
+        parent.postMessage({ type: "profile-by-username-result", found: false, error: error?.message }, "*");
         return;
       }
+
+      parent.postMessage(
+        {
+          type: "profile-by-username-result",
+          found: true,
+          id: profile.id,
+          username: profile.username,
+          aboutMe: profile.about_me || "",
+          avatarUrl: profile.avatar_url || "",
+        },
+        "*"
+      );
+    }
+
+    if (msg.type === "get-board-items") {
+      let targetUserId = msg.userId;
+
+      if (!targetUserId) {
+        const { data: userData } = await client.auth.getUser();
+        if (!userData.user) {
+          parent.postMessage({ type: "board-items", items: [] }, "*");
+          return;
+        }
+        targetUserId = userData.user.id;
+      }
+
       const { data: items, error } = await client
         .from("board_items")
         .select("*")
-        .eq("user_id", userData.user.id)
+        .eq("user_id", targetUserId)
         .order("created_at", { ascending: true });
 
       parent.postMessage({ type: "board-items", items: items || [], error: error?.message }, "*");
@@ -171,7 +227,7 @@
 
       parent.postMessage({ type: "board-add-result", success: true, item: inserted }, "*");
     }
-    
+
     if (msg.type === "update-board-item") {
       const { id, type: _messageType, ...fields } = msg;
       const { error } = await client.from("board_items").update(fields).eq("id", id);
