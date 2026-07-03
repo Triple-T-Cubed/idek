@@ -243,6 +243,14 @@
     if (msg.type === "check-session") {
       const { data } = await client.auth.getUser();
       if (data.user) {
+        // self-heal: make sure this user has a row in `profiles` even if
+        // their session predates the table or they haven't logged in since
+        await client.from("profiles").upsert({
+          id: data.user.id,
+          username: data.user.user_metadata.username,
+          about_me: data.user.user_metadata.about_me || null,
+          avatar_url: data.user.user_metadata.avatar_url || null,
+        });
         parent.postMessage(
           { type: "session-result", loggedIn: true, username: data.user.user_metadata.username },
           "*"
