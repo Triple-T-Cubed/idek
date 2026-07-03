@@ -398,6 +398,74 @@
 
       parent.postMessage({ type: "incoming-requests", requests }, "*");
     }
+
+    // ---------- Direct Messages (friends only — enforced by RLS) ----------
+
+    if (msg.type === "send-message") {
+      const { recipientId, content } = msg;
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "message-send-result", success: false, error: "Not logged in." }, "*");
+        return;
+      }
+      const trimmed = (content || "").trim();
+      if (!trimmed) {
+        parent.postMessage({ type: "message-send-result", success: false, error: "Empty message." }, "*");
+        return;
+      }
+
+      const { data: inserted, error } = await client
+        .from("messages")
+        .insert({ sender_id: userData.user.id, recipient_id: recipientId, content: trimmed })
+        .select()
+        .single();
+
+      parent.postMessage(
+        { type: "message-send-result", success: !error, message: inserted, error: error?.message },
+        "*"
+      );
+    }
+
+    if (msg.type === "get-conversation") {
+      const { otherUserId } = msg;
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "conversation-result", otherUserId, messages: [] }, "*");
+        return;
+      }
+      const me = userData.user.id;
+
+      const { data, error } = await client
+        .from("messages")
+        .select("*")
+        .or(`and(sender_id.eq.${me},recipient_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},recipient_id.eq.${me})`)
+        .order("created_at", { ascending: true });
+
+      parent.postMessage(
+        { type: "conversation-result", otherUserId, messages: data || [], error: error?.message },
+        "*"
+      );
+    }
+
+    if (msg.type === "get-all-my-messages") {
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "all-messages-result", messages: [] }, "*");
+        return;
+      }
+      const me = userData.user.id;
+
+      const { data, error } = await client
+        .from("messages")
+        .select("*")
+        .or(`sender_id.eq.${me},recipient_id.eq.${me}`)
+        .order("created_at", { ascending: false });
+
+      parent.postMessage(
+        { type: "all-messages-result", messages: data || [], myId: me, error: error?.message },
+        "*"
+      );
+    }
   });
 
   parent.postMessage({ type: "helper-ready" }, "*");
