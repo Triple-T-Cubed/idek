@@ -399,6 +399,102 @@
       parent.postMessage({ type: "incoming-requests", requests }, "*");
     }
 
+    // ---------- Posts (photos/videos) ----------
+
+    if (msg.type === "add-post") {
+      const { postType, caption, mediaFile, visibility } = msg;
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "add-post-result", success: false, error: "Not logged in." }, "*");
+        return;
+      }
+
+      const fileObj = processIncomingFile(mediaFile, postType === "video" ? "post.mp4" : "post.png");
+      if (!fileObj) {
+        parent.postMessage({ type: "add-post-result", success: false, error: "No file provided." }, "*");
+        return;
+      }
+
+      const filePath = `${userData.user.id}/${Date.now()}.${fileObj.ext}`;
+      const { error: uploadError } = await client.storage
+        .from("post-media")
+        .upload(filePath, fileObj.blob, { contentType: fileObj.blob.type });
+
+      if (uploadError) {
+        parent.postMessage({ type: "add-post-result", success: false, error: uploadError.message }, "*");
+        return;
+      }
+
+      const { data: publicUrlData } = client.storage.from("post-media").getPublicUrl(filePath);
+
+      const { data: inserted, error: insertError } = await client
+        .from("posts")
+        .insert({
+          user_id: userData.user.id,
+          type: postType,
+          media_url: publicUrlData.publicUrl,
+          caption: caption || null,
+          visibility: visibility === "friends" ? "friends" : "public",
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        parent.postMessage({ type: "add-post-result", success: false, error: insertError.message }, "*");
+        return;
+      }
+
+      parent.postMessage({ type: "add-post-result", success: true, post: inserted }, "*");
+    }
+
+    if (msg.type === "get-posts-of-user") {
+      const { userId } = msg;
+      const { data, error } = await client
+        .from("posts")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+      parent.postMessage({ type: "user-posts", userId, posts: data || [], error: error?.message }, "*");
+    }
+
+    if (msg.type === "get-feed-posts") {
+      const { data, error } = await client
+        .from("posts")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      if (error || !data || data.length === 0) {
+        parent.postMessage({ type: "feed-posts", posts: [], error: error?.message }, "*");
+        return;
+      }
+
+      const authorIds = [...new Set(data.map((p) => p.user_id))];
+      const { data: profiles } = await client
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .in("id", authorIds);
+
+      const profileMap = {};
+      (profiles || []).forEach((p) => {
+        profileMap[p.id] = p;
+      });
+
+      const posts = data.map((p) => ({
+        ...p,
+        author: profileMap[p.user_id] || { username: "unknown", avatar_url: null },
+      }));
+
+      parent.postMessage({ type: "feed-posts", posts }, "*");
+    }
+
+    if (msg.type === "delete-post") {
+      const { id } = msg;
+      const { error } = await client.from("posts").delete().eq("id", id);
+      parent.postMessage({ type: "delete-post-result", success: !error, id, error: error?.message }, "*");
+    }
+
     // ---------- Direct Messages (friends only — enforced by RLS) ----------
 
     if (msg.type === "send-message") {
