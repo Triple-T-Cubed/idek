@@ -172,7 +172,7 @@
         parent.postMessage({ type: "update-theme-result", success: false, error: "Not logged in." }, "*");
         return;
       }
-
+      
       const { error } = await client
         .from("profiles")
         .update({
