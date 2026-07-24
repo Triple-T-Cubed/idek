@@ -614,12 +614,56 @@
 
       parent.postMessage({ type: "mark-read-result", success: !error, otherUserId, error: error?.message }, "*");
     }
-  });
 
-  parent.postMessage({ type: "helper-ready" }, "*");
-</script>
-</body>
-</html>
+    // ---------- Delete account ----------
+
+    if (msg.type === "delete-account") {
+      const { data: userData } = await client.auth.getUser();
+      if (!userData.user) {
+        parent.postMessage({ type: "delete-account-result", success: false, error: "Not logged in." }, "*");
+        return;
+      }
+      const uid = userData.user.id;
+
+      try {
+        // Remove any files this user owns in storage
+        for (const bucket of ["avatars", "board-images", "post-media"]) {
+          const { data: files, error: listError } = await client.storage.from(bucket).list(uid);
+          if (!listError && files && files.length > 0) {
+            const paths = files.map((f) => `${uid}/${f.name}`);
+            await client.storage.from(bucket).remove(paths);
+          }
+        }
+
+        // Wipe rows across every table that references this user
+        await client.from("board_items").delete().eq("user_id", uid);
+        await client.from("posts").delete().eq("user_id", uid);
+        await client.from("messages").delete().or(`sender_id.eq.${uid},recipient_id.eq.${uid}`);
+        await client.from("friendships").delete().or(`requester_id.eq.${uid},addressee_id.eq.${uid}`);
+        await client.from("profiles").delete().eq("id", uid);
+
+        // Try to remove the auth account itself (needs the delete_own_account
+        // SQL function set up in Supabase — see setup notes). If it's not
+        // set up yet, the data above is still gone; only the empty auth
+        // account would remain.
+        let authDeleted = true;
+        const { error: rpcError } = await client.rpc("delete_own_account");
+        if (rpcError) {
+          authDeleted = false;
+          console.warn("delete_own_account RPC failed (auth account not removed):", rpcError.message);
+        }
+
+        await client.auth.signOut();
+
+        parent.postMessage({ type: "delete-account-result", success: true, authDeleted }, "*");
+      } catch (err) {
+        parent.postMessage(
+          { type: "delete-account-result", success: false, error: err.message || "Something went wrong." },
+          "*"
+        );
+      }
+    }
+  });
 
   parent.postMessage({ type: "helper-ready" }, "*");
 </script>
